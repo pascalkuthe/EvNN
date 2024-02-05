@@ -30,7 +30,19 @@ __all__ = [
     'EGRU'
 ]
 
+def hard_sigmoid(x):
+    zero = torch.zeros_like(x).to(x.device)
+    one = torch.ones_like(x).to(x.device)
+    return torch.minimum(torch.maximum(0.25 * x + 0.5, zero), one)
 
+
+def hard_tanh(x):
+    one = torch.ones_like(x).to(x.device)
+    return torch.minimum(torch.maximum(x, -one), one)
+
+
+tanh = hard_tanh
+sigmoid = hard_sigmoid
 class SpikeFunction(torch.autograd.Function):
     """
     We can implement our own custom autograd Functions by subclassing
@@ -116,9 +128,9 @@ def EGRUScript(
         vx = torch.chunk(Wx[t], 3, 1)
         vh = torch.chunk(Rh, 3, 1)
 
-        z = torch.sigmoid(vx[0] + vh[0])
-        r = torch.sigmoid(vx[1] + vh[1])
-        g = torch.tanh(vx[2] + r * vh[2])
+        z = sigmoid(vx[0] + vh[0])
+        r = sigmoid(vx[1] + vh[1])
+        g = tanh(vx[2] + r * vh[2])
 
         cur_h = (z * h[t] + (1 - z) * g)
         if zoneout_prob:
@@ -302,7 +314,7 @@ class EGRU(BaseRNN):
             torch.Tensor([pseudo_derivative_support]), requires_grad=False)
         self.thr_reparam = nn.Parameter(torch.normal(torch.zeros(self.hidden_size) + thr_mean,
                                                      math.sqrt(2) * torch.ones(self.hidden_size)))
-        self.thr = torch.sigmoid(self.thr_reparam)
+        self.thr = sigmoid(self.thr_reparam)
 
     def to_native_weights(self):
         """
@@ -398,7 +410,7 @@ class EGRU(BaseRNN):
         input = self._permute(input)
         state_shape = [1, input.shape[1], self.hidden_size]
         h0 = self._get_state(input, state, state_shape)
-        thr = torch.sigmoid(self.thr_reparam)
+        thr = sigmoid(self.thr_reparam)
         y, h, o, trace = self._impl(
             input, h0[0], thr, self._get_zoneout_mask(input))
         state = self._get_final_state(y, lengths)
