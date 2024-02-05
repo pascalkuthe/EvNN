@@ -18,7 +18,8 @@
 """Gated Recurrent Unit"""
 import math
 
-import evnn_pytorch_lib as LIB
+# import evnn_pytorch_lib as LIB
+LIB = None
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -273,7 +274,7 @@ class EGRU(BaseRNN):
 
         """
         super().__init__(input_size, hidden_size, batch_first, zoneout, return_state_sequence)
-        self.use_custom_cuda = use_custom_cuda
+        self.use_custom_cuda = False
 
         if grad_clip:
             self.grad_clip_norm(enable=True, norm=grad_clip)
