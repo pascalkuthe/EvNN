@@ -87,6 +87,7 @@ class LanguageModel(nn.Module):
                  alpha,
                  beta,
                  gamma,
+                 qconfig=None,
                  **kwargs):
         super(LanguageModel, self).__init__()
 
@@ -108,6 +109,10 @@ class LanguageModel(nn.Module):
         self.beta = beta
         self.gamma = gamma
         self.ar_loss = 0
+        if qconfig is None:
+            self.qconfig = evnn.QConfig(active=False)
+        else:
+            self.qconfig = qconfig
 
         # input and output layers
         self.variational_dropout = VariationalDropout()
@@ -148,6 +153,7 @@ class LanguageModel(nn.Module):
                                    zoneout=0.0,
                                    return_state_sequence=False,
                                    use_custom_cuda=True,
+                                   qconfig=qconfig,
                                    **kwargs) for l in range(nlayers)]
         else:
             raise NotImplementedError(f"Model '{rnn_type}' not implemented.")
@@ -242,7 +248,7 @@ class LanguageModel(nn.Module):
         new_states = []
         raw_hiddens = []
         dropped_hiddens = []
-        hiddens = embedded
+        hiddens = self.qconfig.fake_quant_io(embedded)
         for l, rnn in enumerate(self.rnns):
             hiddens, final_states = rnn(hiddens, state[l])
 

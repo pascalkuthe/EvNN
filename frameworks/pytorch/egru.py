@@ -25,6 +25,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .base_rnn import BaseRNN
+from.quantize import QConfig
 
 __all__ = [
     'EGRU'
@@ -43,6 +44,7 @@ def hard_tanh(x):
 
 tanh = hard_tanh
 sigmoid = hard_sigmoid
+
 class SpikeFunction(torch.autograd.Function):
     """
     We can implement our own custom autograd Functions by subclassing
@@ -91,7 +93,9 @@ def EGRUScript(
         bias,
         recurrent_bias,
         thr,
-        zoneout_mask):
+        zoneout_mask,
+        qconfig: QConfig,
+    ):
     """
     Perform EGRU computation using Pytorch primitives.
 
@@ -115,6 +119,12 @@ def EGRUScript(
     trace values.
     """
 
+    thr = qconfig.fake_quant_io(thr)
+    kernel = qconfig.fake_quant_weights(kernel)
+    recurrent_kernel = qconfig.fake_quant_weights(recurrent_kernel)
+    bias = qconfig.fake_quant_bias(bias.contiguous())
+    recurrent_bias = qconfig.fake_quant_bias(recurrent_bias.contiguous())
+
     time_steps = input.shape[0]
     batch_size = input.shape[1]
     hidden_size = recurrent_kernel.shape[0]
@@ -129,19 +139,25 @@ def EGRUScript(
         vh = torch.chunk(Rh, 3, 1)
 
         z = sigmoid(vx[0] + vh[0])
+        z = qconfig.fake_quant_io(z)
         r = sigmoid(vx[1] + vh[1])
-        g = tanh(vx[2] + r * vh[2])
+        # 6 bit S=2^5
+        r = qconfig.fake_quant_io(r)
+        # 6 bit S=2^3
+        vh2 = qconfig.fake_quant_rec_candidate_activaton(vh[2])
+        # r*vh2 = 12bit 6 bit S=2^8
+        # vx[2] = 24bit S=2^12
+        # requant r*vh2 to S=2^12 16 bit with a 4 left shift (lossless)
+        # TODO: multiply with y[t] and recurrent bias instead?
+        g = tanh(vx[2] + r*vh2)
+        g = qconfig.fake_quant_io(g)
 
         cur_h = (z * h[t] + (1 - z) * g)
-        if zoneout_prob:
-            if training:
-                cur_h = (cur_h - h[t]) * zoneout_mask[t] + h[t]
-            else:
-                cur_h = zoneout_prob * h[t] + (1 - zoneout_prob) * h[t]
-
+        cur_h = qconfig.fake_quant_io(cur_h)
         event = SpikeFunction.apply(
             cur_h - thr, dampening_factor, pseudo_derivative_support)
         o.append(event)
+        # lossless since 0 <= event <= 1 and cur_h >= thr
         h.append(cur_h - event * thr)
         y.append(event * cur_h)
 
@@ -251,6 +267,7 @@ class EGRU(BaseRNN):
     Event based Gated Recurrent Unit layer.
 
     """
+    qconfig: QConfig
 
     def __init__(self,
                  input_size,
@@ -263,7 +280,9 @@ class EGRU(BaseRNN):
                  thr_mean=0.0,
                  return_state_sequence=False,
                  grad_clip=None,
-                 use_custom_cuda=True):
+                 use_custom_cuda=True,
+                 qconfig = None,
+             ):
         """
         Initialize the parameters of the GRU layer.
 
@@ -287,6 +306,10 @@ class EGRU(BaseRNN):
         """
         super().__init__(input_size, hidden_size, batch_first, zoneout, return_state_sequence)
         self.use_custom_cuda = False
+        if qconfig is None:
+            self.qconfig = QConfig(active=False)
+        else:
+            self.qconfig = qconfig
 
         if grad_clip:
             self.grad_clip_norm(enable=True, norm=grad_clip)
@@ -451,4 +474,5 @@ class EGRU(BaseRNN):
                 self.bias.contiguous(),
                 self.recurrent_bias.contiguous(),
                 thr.contiguous(),
-                zoneout_mask.contiguous())
+                zoneout_mask.contiguous(),
+                self.qconfig)
