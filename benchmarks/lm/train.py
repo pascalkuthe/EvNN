@@ -122,7 +122,7 @@ def main(args):
     print("RNN parameters: ", list(map(lambda x: x[0], model.named_parameters())))
 
     if len(args.checkpoint) > 0:
-        model.load_state_dict(torch.load(args.checkpoint))
+        model.load_state_dict(torch.load(args.checkpoint, map_location=device))
     model = model.to(device)
 
     # MODEL PRUNING
@@ -292,7 +292,7 @@ def main(args):
                                                              dset=args.dataset,
                                                              batch_size=test_batch_size,
                                                              device=device)
-    model.load_state_dict(torch.load(best_model_path, map_location=device))
+    model.load_state_dict(torch.load(args.checkpoint, map_location=device))
     test_loss, test_activity, test_layerwise_activity_mean, test_layerwise_activity_std, centered_cell_states = \
         evaluate(model=model,
                  eval_data=test_data,
