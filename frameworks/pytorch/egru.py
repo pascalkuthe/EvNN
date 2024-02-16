@@ -126,8 +126,36 @@ def EGRUScript(
     recurrent_bias = qconfig.fake_quant_bias(recurrent_bias.contiguous())
 
     time_steps = input.shape[0]
-    batch_size = input.shape[1]
-    hidden_size = recurrent_kernel.shape[0]
+    # batch_size = input.shape[1]
+    hidden_size = h0.shape[1]
+    # input_size = input.shape[2]
+    # weights = torch.cat((torch.abs(kernel), torch.abs(recurrent_kernel)), 0)
+    # print(f"sparse {torch.sum(weights == 0)/(3*(input_size+hidden_size)*hidden_size)}")
+    sparse = torch.min(torch.cat((torch.sum(kernel == 0, dim=1),torch.sum(recurrent_kernel == 0, dim=1)), 0))
+
+    # def subcols(matrix, num):
+    #     return torch.reshape(padded, (matrix.shape[0], num, int(matrix.shape[1]/num) + int(padding != 0)))
+    def sparsity(matrix, num):
+        if matrix.shape[1]%num == 0:
+            padding = 0
+        else:
+            padding = num-matrix.shape[1]%num
+        padded = torch.nn.functional.pad(matrix, (0, padding))
+        res = matrix.shape[1]
+        zeros = padded == 0
+        for i in range(num):
+            # print(zeros[:,i::num].shape)
+            subcol = torch.min(torch.sum(zeros[:,i::num], dim=1))
+            # print(subcol)
+            if subcol < res:
+                res = subcol
+        return res*num
+    # sparse = sparsity(kernel, 10)
+    # print(f"load balanced sparse kernel {sparse} {sparse/(3*hidden_size)}")
+    # sparse = sparsity(recurrent_kernel, 10)
+    # print(f"load balanced sparse rec kernel {sparse} {sparse/(3*hidden_size)}")
+
+    # print(f"sparse load_balanced {torch.sum(weights == 0)/(3*(input_size+hidden_size)*hidden_size)}")
 
     h = [torch.zeros_like(h0)]
     o = [torch.zeros_like(h0)]
