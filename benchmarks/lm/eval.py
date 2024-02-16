@@ -22,7 +22,8 @@ def evaluate(model, eval_data, criterion, batch_size, bptt, ntokens, device, ret
     model.eval()
 
     # initialize evaluation metrics
-    iter_range = range(0, eval_data.size(0) - 1, bptt)
+    size = eval_data.size(0) - 1
+    iter_range = range(0, size, bptt)
     hidden_dims = [rnn.hidden_size for rnn in model.rnns]
 
     total_loss = 0.
@@ -43,6 +44,7 @@ def evaluate(model, eval_data, criterion, batch_size, bptt, ntokens, device, ret
 
         # iterate evaluation data
         for num_iter, index in enumerate(iter_range):
+            print(f"{index}/{size}")
 
             # draw a batch
             data, targets = d.get_batch(eval_data, index, seq_len=bptt, batch_first=True)
