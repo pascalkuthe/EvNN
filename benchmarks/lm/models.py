@@ -276,6 +276,7 @@ class LanguageModel(nn.Module):
 
         # decoder forward
         hiddens_ = hiddens.contiguous()
+        hiddens_ = self.qconfig.dequant(hiddens_)
         hiddens_ = self.variational_dropout(hiddens_)
         dropped_hiddens.append(hiddens_)
 

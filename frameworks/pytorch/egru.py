@@ -26,6 +26,7 @@ import torch.nn.functional as F
 
 from .base_rnn import BaseRNN
 from.quantize import QConfig
+from.egru_quant import EGRUQuant
 
 __all__ = [
     'EGRU'
@@ -81,6 +82,60 @@ class SpikeFunction(torch.autograd.Function):
 
 
 # @torch.jit.script
+def EGRUScriptQuant(
+        input,
+        h0,
+        egru: EGRUQuant
+    ):
+    """
+    Perform EGRU computation using Pytorch primitives.
+
+    :param training: bool,
+    :type training: bool
+    :param zoneout_prob: the probability of zoneout
+    :type zoneout_prob: float
+    :param dampening_factor: This is the dampening factor for the spike function
+    :type dampening_factor: float
+    :param pseudo_derivative_support: float,
+    :type pseudo_derivative_support: float
+    :param input: the input to the RNN, of shape (time_steps, batch_size, input_size)
+    :param h0: initial hidden state
+    :param kernel: the input weight matrix
+    :param recurrent_kernel: the recurrent weight matrix
+    :param bias: bias vector
+    :param recurrent_bias: bias for recurrent kernel
+    :param thr: threshold
+    :param zoneout_mask: a mask that is used to randomly set some of the hidden units to zero
+    :return: The output of the EGRU cell, the hidden state, the output of the spike function, and the
+    trace values.
+    """
+
+    egru.reset(h0.cpu().detach().numpy())
+    time_steps = input.shape[0]
+    h = [torch.zeros_like(h0)]
+    o = [torch.zeros_like(h0)]
+    y = [h0]
+    for t in range(time_steps):
+        input_ = input[t].cpu().detach().numpy()
+        res = egru(input_)
+
+        o.append(torch.from_numpy(res != 0).type(torch.float))
+        # lossless since 0 <= event <= 1 and cur_h >= thr
+        h.append(torch.from_numpy(egru.state))
+        res = torch.from_numpy(res)
+        y.append(res)
+
+    y = torch.stack(y)
+    h = torch.stack(h)
+    o = torch.stack(o)
+
+    tr_vals = torch.zeros_like(y)
+    alpha = 0.9
+    for t in range(1, time_steps + 1):
+        tr_vals[t] = alpha * tr_vals[t - 1] + (1 - alpha) * y[t]
+
+    return y, h, o, tr_vals
+    
 def EGRUScript(
         training: bool,
         zoneout_prob: float,
@@ -334,10 +389,12 @@ class EGRU(BaseRNN):
         """
         super().__init__(input_size, hidden_size, batch_first, zoneout, return_state_sequence)
         self.use_custom_cuda = False
+
         if qconfig is None:
             self.qconfig = QConfig(active=False)
         else:
             self.qconfig = qconfig
+        self.quant = None
 
         if grad_clip:
             self.grad_clip_norm(enable=True, norm=grad_clip)
@@ -472,6 +529,18 @@ class EGRU(BaseRNN):
         return output, (h, o, trace)
 
     def _impl(self, input, state, thr, zoneout_mask):
+        if self.qconfig.active and not self.qconfig.fake_quant and not self.training and self.quant is None:
+            self.quant = EGRUQuant(
+                self.kernel.contiguous().cpu().detach().numpy(),
+                self.bias.contiguous().cpu().detach().numpy(),
+                self.recurrent_kernel.contiguous().cpu().detach().numpy(),
+                self.recurrent_bias.contiguous().cpu().detach().numpy(),
+                thr.cpu().detach().numpy(),
+                weight_scale = self.qconfig.weight_scale,
+                weight_bits = self.qconfig.weights_bits,
+                activation_bits = self.qconfig.activation_bits,
+                resest_gate_scale = self.qconfig.reset_gate_scale,
+            )
         if self.use_custom_cuda:
             return EGRUFunction.apply(
                 self.training,
@@ -488,6 +557,12 @@ class EGRU(BaseRNN):
                 self.recurrent_bias.contiguous(),
                 thr.contiguous(),
                 zoneout_mask.contiguous())
+        elif not self.training and self.quant is not None:
+            return EGRUScriptQuant(
+                input.contiguous(),
+                state.contiguous(),
+                self.quant,
+            )
         else:
             return EGRUScript(
                 self.training,

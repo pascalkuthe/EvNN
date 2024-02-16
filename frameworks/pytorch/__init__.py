@@ -23,6 +23,7 @@ import torch as _
 
 from ._version import __version__  # generated in setup.py
 from .egru import EGRU
+from .egru_quant import EGRUQuant
 from .quantize import QConfig
 
 __all__ = [

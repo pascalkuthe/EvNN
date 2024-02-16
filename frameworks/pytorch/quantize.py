@@ -1,60 +1,109 @@
 import torch
+import numpy as np
+
+
+def quantize(val, bits, factor=1):
+    scale = 1 << (bits - 1)
+    res = (
+        np.round((val * scale) / factor)
+        .clip(
+            -scale,
+            scale - 1,
+        )
+        .astype(np.int32)
+    )
+    return res
+
+
+def dequantize(val, bits):
+    return val.type(torch.float) / (1 << (bits - 1))
 
 
 class QConfig:
-    io_scale: float
-    io_zp: int
-    weight_scale: float
-    weight_zp: int
+    activation_bits: int = 6,
+    weights_bits: int = 6,
+    weight_scale: int = 1,
+    reset_gate_scale: int = 4,
     active: bool
+    fake_quant: bool
+    # max_val = 0
 
     def __init__(
         self,
-        io_scale: float = 1/128,
-        weight_scale: float = 1/128,
-        weight_zp: int = 0,
-        io_zp: int = 0,
-        bias_zp: int = 0,
+        activation_bits: int = 6,
+        weights_bits: int = 6,
+        weight_scale: int = 1,
+        reset_gate_scale: int = 4,
         active=True,
     ):
-        self.io_scale = io_scale
-        self.io_zp = io_zp
+        self.activation_bits = activation_bits
+        self.weights_bits = weights_bits
         self.weight_scale = weight_scale
-        self.weight_zp = weight_zp
+        self.reset_gate_scale = reset_gate_scale
         self.active = True
+        self.fake_quant = False
 
     def fake_quant_weights(self, weights: torch.Tensor) -> torch.Tensor:
         if self.active:
-            return torch.fake_quantize_per_tensor_affine(
+            scale = 1 << (self.activation_bits - 1)
+            res = torch.fake_quantize_per_tensor_affine(
                 weights,
-                self.weight_scale,
-                self.weight_zp,
-                -128,
-                127
+                self.weight_scale/scale,
+                0,
+                -scale,
+                scale - 1,
             )
+            # assert torch.min(torch.abs(res[res != 0])) >= 1/self.weight_scale
+            # assert torch.max(torch.abs(res)) <= 1
+            return res
         else:
+            assert False
             return weights
+
+    def dequant(self, io: torch.Tensor) -> torch.Tensor:
+        if not self.active or self.fake_quant:
+            return io
+        return dequantize(io, self.activation_bits)
 
     def fake_quant_io(self, io: torch.Tensor) -> torch.Tensor:
         if self.active:
-            return torch.fake_quantize_per_tensor_affine(
-                io,
-                self.io_scale,
-                self.io_zp,
-                -128,
-                127
-            )
+            if self.fake_quant:
+                scale = 1 << (self.activation_bits - 1)
+                res = torch.fake_quantize_per_tensor_affine(
+                    io, 1 / scale, 0, -scale, scale - 1
+                )
+            else:
+                res = quantize(io.cpu().detach().numpy(), self.activation_bits)
+                res = torch.from_numpy(res)
+            # assert torch.min(torch.abs(res[res != 0])) >= 1/self.io_scale
+            # assert torch.max(torch.abs(res)) <= 1
+            return res
         else:
+            assert False
+            return io
+
+    def fake_quant_rec_candidate_activaton(self, io: torch.Tensor) -> torch.Tensor:
+        if self.active:
+            # max_val = torch.max(torch.abs(io))
+            # if max_val > QConfig.max_val:
+            #     print(max_val)
+            #     QConfig.max_val = max_val
+            scale = 1 << (self.activation_bits - 1)
+            res = torch.fake_quantize_per_tensor_affine(
+                    io, self.reset_gate_scale / scale, 0, -scale, scale - 1
+            )
+            # assert torch.min(torch.abs(res[res != 0])) >= 1/self.io_scale
+            # assert torch.max(torch.abs(res)) <= 1
+            return res
+        else:
+            assert False
             return io
 
     def fake_quant_bias(self, bias: torch.Tensor) -> torch.Tensor:
         if self.active:
+            scale = 1 << (self.activation_bits - 1 + self.weights_bits - 1)
             return torch.fake_quantize_per_tensor_affine(
-                bias,
-                self.io_scale * self.weight_scale,
-                0,
-                -32_768,
-                32_767
+                    bias, self.reset_gate_scale / scale, 0, -32_768, 32_767
             )
         else:
             return bias
