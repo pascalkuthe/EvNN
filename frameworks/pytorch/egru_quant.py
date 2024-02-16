@@ -62,6 +62,7 @@ class EGRUQuant:
         )
         self.thr = quantize(thr, activation_bits)
         self.state = np.zeros_like(self.thr)
+        self.dead_neurons = np.repeat(True, len(self.thr))
 
     def reset(self, prev_output: np.ndarray):
         self.state = np.zeros_like(self.thr)
@@ -87,7 +88,43 @@ class EGRUQuant:
             self.activation_bits - 1,
             self.activation_bits,
         )
-        sparsity = np.sum(cur_h >= self.thr) / len(self.thr)
+        sparsity = np.sum(cur_h >= self.thr) / np.sum(cur_h == cur_h)
+        full_size = 8 * np.sum(cur_h == cur_h)
+        # non_sparse = cur_h.flatten() >= self.thr
+        # cont3 = np.append(non_sparse, [False, False, False])[3:]
+        # cont2 = np.append(non_sparse, [False, False])[2:] & np.bitwise_not(np.append(cont3, False)[1:])
+        # cont1 = np.append(non_sparse, True)[1:] & np.bitwise_not(np.append(cont2, False)[1:])
+
+        # cont2 = cont1 | (
+        #     np.bitwise_not(cont1) & (np.append(non_sparse, [False, False])[2:])
+        # )
+        # cont3 = cont3 | np.bitwise_not
+
+        # print(f"stats {np.sum(contiuations)/np.sum(non_sparse)} {sparsity}")
+        x = (cur_h >= self.thr).flatten()
+        n = len(x)
+        loc_run_start = np.empty(n, dtype=bool)
+        loc_run_start[0] = True
+        np.not_equal(x[:-1], x[1:], out=loc_run_start[1:])
+        run_starts = np.nonzero(loc_run_start)[0]
+        self.dead_neurons &= np.logical_and.reduce(cur_h < self.thr, axis=0)
+
+        # find run lengths
+        run_lengths = np.diff(np.append(run_starts, n))
+        events = np.diff(
+            np.arange(n, dtype=np.uint16)[x],
+            prepend=0,
+        )
+        dynamic_size1 = 8 * len(events) + 8 * np.sum(events > 2)
+        dynamic_size2 = 2 * 8 * len(events)
+        static_size = 3 * 8 * len(events)
+        # print(f"stat {sparsity} {dynamic_size1/dynamic_size2}")
+
+        #        # print(f"foo {len(run_lengths)} {len(x)}")
+        # print(f"stat {np.sum(run_lengths == 2)}")
+        # below_1 = np.sum(run_lengths <= 2) / np.sum(cur_h == cur_h)
+        # if EGRUQuant.max_run < run_lengths:
+        #     EGRUQuant.max_run = run_lengths
         output = np.where(cur_h >= self.thr, cur_h, 0)
         self.state = cur_h - np.where(cur_h >= self.thr, self.thr, 0)
         self.prev_output = output

@@ -27,6 +27,8 @@ import torch.nn.functional as F
 from .base_rnn import BaseRNN
 from.quantize import QConfig
 from.egru_quant import EGRUQuant
+import numpy as np
+
 
 __all__ = [
     'EGRU'
@@ -125,6 +127,7 @@ def EGRUScriptQuant(
         res = torch.from_numpy(res)
         y.append(res)
 
+    print(f"dead neurons {np.count_nonzero(egru.dead_neurons)}")
     y = torch.stack(y)
     h = torch.stack(h)
     o = torch.stack(o)
@@ -150,6 +153,7 @@ def EGRUScript(
         thr,
         zoneout_mask,
         qconfig: QConfig,
+        dead_neurons,
     ):
     """
     Perform EGRU computation using Pytorch primitives.
@@ -237,6 +241,9 @@ def EGRUScript(
 
         cur_h = (z * h[t] + (1 - z) * g)
         cur_h = qconfig.fake_quant_io(cur_h)
+        dead = np.logical_and.reduce((cur_h < thr).cpu().detach().numpy() , axis=0)
+        np.logical_and(dead, dead_neurons, out=dead_neurons)
+        # print(np.nonzero(self.zeros))
         event = SpikeFunction.apply(
             cur_h - thr, dampening_factor, pseudo_derivative_support)
         o.append(event)
@@ -247,6 +254,7 @@ def EGRUScript(
     y = torch.stack(y)
     h = torch.stack(h)
     o = torch.stack(o)
+    print(f"dead {np.count_nonzero(dead_neurons)}")
 
     tr_vals = torch.zeros_like(y)
     alpha = 0.9
@@ -423,6 +431,7 @@ class EGRU(BaseRNN):
         self.thr_reparam = nn.Parameter(torch.normal(torch.zeros(self.hidden_size) + thr_mean,
                                                      math.sqrt(2) * torch.ones(self.hidden_size)))
         self.thr = sigmoid(self.thr_reparam)
+        self.dead_neurons = np.repeat(True, len(self.thr))
 
     def to_native_weights(self):
         """
@@ -578,4 +587,4 @@ class EGRU(BaseRNN):
                 self.recurrent_bias.contiguous(),
                 thr.contiguous(),
                 zoneout_mask.contiguous(),
-                self.qconfig)
+                self.qconfig, self.dead_neurons)

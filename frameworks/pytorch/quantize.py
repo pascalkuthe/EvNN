@@ -57,7 +57,6 @@ class QConfig:
             # assert torch.max(torch.abs(res)) <= 1
             return res
         else:
-            assert False
             return weights
 
     def dequant(self, io: torch.Tensor) -> torch.Tensor:
@@ -79,7 +78,6 @@ class QConfig:
             # assert torch.max(torch.abs(res)) <= 1
             return res
         else:
-            assert False
             return io
 
     def fake_quant_rec_candidate_activaton(self, io: torch.Tensor) -> torch.Tensor:
@@ -96,7 +94,6 @@ class QConfig:
             # assert torch.max(torch.abs(res)) <= 1
             return res
         else:
-            assert False
             return io
 
     def fake_quant_bias(self, bias: torch.Tensor) -> torch.Tensor:
