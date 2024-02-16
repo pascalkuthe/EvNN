@@ -58,10 +58,10 @@ def evaluate(model, eval_data, criterion, batch_size, bptt, ntokens, device, ret
             output_gate_vals = [torch.where(hid == 0, torch.zeros_like(hid), torch.ones_like(hid)).to(device) for hid in
                                 hid_full]
 
-            layer_mean_activity = torch.tensor([torch.mean(ogv).to(device) for ogv in output_gate_vals])
+            layer_mean_activity = torch.tensor([torch.mean(ogv.type(torch.float)).to(device) for ogv in output_gate_vals])
             layer_mean_activities[num_iter] = layer_mean_activity
 
-            mean_activity = torch.mean(torch.cat([ogv.flatten() for ogv in output_gate_vals]))
+            mean_activity = torch.mean(torch.cat([ogv.flatten().type(torch.float) for ogv in output_gate_vals]))
             mean_activities[num_iter] = mean_activity
 
             if model.rnn_type == 'egrud':
