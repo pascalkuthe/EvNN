@@ -15,6 +15,7 @@
 
 import torch
 import lm.data as d
+import math
 
 
 def evaluate(model, eval_data, criterion, batch_size, bptt, ntokens, device, return_hidden=False):
@@ -27,6 +28,7 @@ def evaluate(model, eval_data, criterion, batch_size, bptt, ntokens, device, ret
     hidden_dims = [rnn.hidden_size for rnn in model.rnns]
 
     total_loss = 0.
+    total_data = 0
     mean_activities = torch.zeros(len(iter_range), dtype=torch.float16, device=device)
     layer_mean_activities = torch.zeros((len(iter_range), model.nlayers), dtype=torch.float16, device=device)
     centered_cell_states = [torch.zeros((len(iter_range), batch_size, hidden_dim), dtype=torch.float16, device=device)
@@ -74,7 +76,10 @@ def evaluate(model, eval_data, criterion, batch_size, bptt, ntokens, device, ret
 
             # compute loss
             output_flat = output.view(-1, ntokens)
-            total_loss += data.numel() * criterion(output_flat, targets).item()
+            loss = criterion(output_flat, targets).item()
+            total_loss += data.numel() * loss
+            total_data += data.numel() 
+            print(f"perplexity {math.exp(total_loss/total_data)}")
 
     if return_hidden:
         return total_loss / eval_data.numel(), torch.mean(mean_activities), \
